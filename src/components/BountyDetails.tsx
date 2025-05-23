@@ -1,3 +1,4 @@
+import React, { useState, useEffect } from "react";
 import {
   ArrowLeft,
   Calendar,
@@ -7,44 +8,104 @@ import {
   CheckCircle,
   AlertCircle,
   ExternalLink,
+  Eye,
+  RefreshCw,
+  FileText,
+  MessageCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Separator } from "@/components/ui/separator";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { getStatusColor, formatDate, daysRemaining } from "@/lib/utils";
+import { useAllBounties } from "@/hooks/useAllBounties";
+import EnhancedSubmissionDetails from "./SubmissionDetails"; // Keep your existing import path
 
 interface BountyDetailsProps {
-  bounty: {
-    id: number;
-    title: string;
-    description: string;
-    reward: string; // USDC amount as string
-    deadline: string;
-    tags: string[];
-    creator: string;
-    applicants: number;
-    status: number; // 0=Active, 1=Completed, 2=Cancelled
-    metadataCID: string;
-    hunter: string;
-    rawAmount: bigint;
-    isLoading?: boolean;
-    metadataError?: string;
-  } | null;
-  hasApplied?: boolean;
+  bountyId: number;
   onBack: () => void;
-  onApply?: () => void;
+  onApply?: (bountyId: number) => void;
 }
 
 export default function BountyDetails({
-  bounty,
-  hasApplied = false,
+  bountyId,
   onBack,
   onApply,
 }: BountyDetailsProps) {
-  if (!bounty) return null;
+  const {
+    bounties,
+    isLoading,
+    canViewSubmissionDetails,
+    getUserSubmissionForBounty,
+    getAllSubmissionsForBounty,
+    isBountyCreator,
+    refreshBountySubmissions,
+  } = useAllBounties();
+
+  const [showSubmissionDetails, setShowSubmissionDetails] = useState(false);
+  const [selectedSubmission, setSelectedSubmission] = useState<{
+    hunter: string;
+    descriptionCID: string;
+  } | null>(null);
+  const [allSubmissions, setAllSubmissions] = useState<
+    Array<{
+      hunter: string;
+      descriptionCID: string;
+    }>
+  >([]);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [loadingSubmissions, setLoadingSubmissions] = useState(false);
+
+  // Find the specific bounty
+  const bounty = bounties.find((b) => b.id === bountyId);
+
+  // Get submission status for current user
+  const canViewDetails = canViewSubmissionDetails(bountyId);
+  const userSubmission = getUserSubmissionForBounty(bountyId);
+  const hasUserSubmitted = !!userSubmission;
+  const isCreator = isBountyCreator(bountyId);
+
+  console.log("Debug BountyDetails:", {
+    bountyId,
+    canViewDetails,
+    userSubmission,
+    hasUserSubmitted,
+    isCreator,
+    allSubmissions: allSubmissions.length,
+  });
+
+  // Auto-refresh submissions when component mounts
+  useEffect(() => {
+    if (bounty && !bounty.isLoadingSubmissions) {
+      refreshBountySubmissions(bountyId);
+    }
+  }, [bountyId, bounty?.isLoadingSubmissions]);
+
+  // Load all submissions if user is bounty creator
+  useEffect(() => {
+    if (isCreator && bounty && canViewDetails) {
+      loadAllSubmissions();
+    }
+  }, [isCreator, bounty?.id, canViewDetails]);
+
+  const loadAllSubmissions = async () => {
+    if (!isCreator) return;
+
+    setLoadingSubmissions(true);
+    try {
+      const submissions = await getAllSubmissionsForBounty(bountyId);
+      setAllSubmissions(submissions);
+      console.log(
+        `Loaded ${submissions.length} submissions for bounty creator`
+      );
+    } catch (error) {
+      console.error("Error loading submissions:", error);
+    } finally {
+      setLoadingSubmissions(false);
+    }
+  };
 
   const getStatusInfo = (status: number) => {
     switch (status) {
@@ -75,8 +136,6 @@ export default function BountyDetails({
     }
   };
 
-  const statusInfo = getStatusInfo(bounty.status);
-
   const formatCreatorAddress = (address: string) => {
     return `${address?.slice(0, 6)}...${address?.slice(-4)}`;
   };
@@ -105,8 +164,64 @@ export default function BountyDetails({
     }
   };
 
-  // Show loading state
-  if (bounty.isLoading) {
+  // Handle refreshing submission data
+  const handleRefreshSubmissions = async () => {
+    setIsRefreshing(true);
+    try {
+      await refreshBountySubmissions(bountyId);
+      // If user is bounty creator, also refresh all submissions
+      if (isCreator) {
+        await loadAllSubmissions();
+      }
+    } catch (error) {
+      console.error("Error refreshing submissions:", error);
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
+  // Handle viewing submission details
+  const handleViewSubmissionDetails = (submission?: {
+    hunter: string;
+    descriptionCID: string;
+  }) => {
+    if (isCreator && submission) {
+      // Bounty creator viewing a specific submission
+      console.log("Creator viewing submission:", submission);
+      setSelectedSubmission(submission);
+      setShowSubmissionDetails(true);
+    } else if (hasUserSubmitted && userSubmission) {
+      // Hunter viewing their own submission
+      console.log("Hunter viewing own submission:", userSubmission);
+      setSelectedSubmission(userSubmission);
+      setShowSubmissionDetails(true);
+    }
+  };
+
+  // If showing submission details, render that component
+  if (showSubmissionDetails && selectedSubmission && bounty) {
+    return (
+      <EnhancedSubmissionDetails
+        bountyId={bounty.id}
+        bountyTitle={bounty.title}
+        bountyReward={bounty.reward}
+        bountyDescription={bounty.description}
+        submission={selectedSubmission}
+        onBack={() => {
+          setShowSubmissionDetails(false);
+          setSelectedSubmission(null);
+        }}
+        onPaymentComplete={() => {
+          setShowSubmissionDetails(false);
+          setSelectedSubmission(null);
+          handleRefreshSubmissions();
+        }}
+      />
+    );
+  }
+
+  // Show loading state while fetching bounties
+  if (isLoading || !bounty) {
     return (
       <div className="max-w-4xl mx-auto">
         <Button
@@ -131,6 +246,8 @@ export default function BountyDetails({
     );
   }
 
+  const statusInfo = getStatusInfo(bounty.status);
+
   return (
     <div className="max-w-4xl mx-auto">
       <Button
@@ -146,6 +263,18 @@ export default function BountyDetails({
           {/* Status Badge */}
           <div className="flex flex-wrap gap-2 mb-4">
             <Badge className={statusInfo.color}>{statusInfo.text}</Badge>
+            {hasUserSubmitted && !isCreator && (
+              <Badge className="bg-green-100 text-green-800">
+                <CheckCircle className="mr-1 h-3 w-3" />
+                You Applied
+              </Badge>
+            )}
+            {isCreator && (
+              <Badge className="bg-blue-100 text-blue-800">
+                <CheckCircle className="mr-1 h-3 w-3" />
+                Your Bounty
+              </Badge>
+            )}
           </div>
 
           {/* Title and Reward */}
@@ -182,6 +311,11 @@ export default function BountyDetails({
                 </Avatar>
                 <span className="text-gray-700">
                   {formatCreatorAddress(bounty.creator)}
+                  {isCreator && (
+                    <span className="ml-2 text-blue-600 font-medium">
+                      (You)
+                    </span>
+                  )}
                 </span>
               </div>
             </div>
@@ -199,7 +333,7 @@ export default function BountyDetails({
               <div className="flex items-center">
                 <Clock className="text-gray-400 mr-2 h-4 w-4" />
                 <span className="text-gray-700">
-                  {formatDeadline(bounty.deadline)}
+                  {formatDeadline(bounty?.deadline!)}
                   {bounty.deadline && (
                     <span className="text-indigo-600 ml-2 font-medium">
                       ({calculateDaysRemaining(bounty.deadline)})
@@ -241,26 +375,115 @@ export default function BountyDetails({
 
           {/* Applications */}
           <div className="mb-8">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4">
-              Applications
-            </h3>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">
+                Applications
+              </h3>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleRefreshSubmissions}
+                disabled={
+                  isRefreshing ||
+                  bounty.isLoadingSubmissions ||
+                  loadingSubmissions
+                }
+                className="flex items-center gap-2"
+              >
+                <RefreshCw
+                  className={`h-4 w-4 ${
+                    isRefreshing || loadingSubmissions ? "animate-spin" : ""
+                  }`}
+                />
+                Refresh
+              </Button>
+            </div>
+
             <div className="bg-gray-50 p-6 rounded-xl">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center">
                   <Users className="text-indigo-600 mr-2 h-4 w-4" />
                   <span className="text-gray-700">
-                    <b>{bounty.applicants}</b> application
-                    {bounty.applicants !== 1 && "s"} submitted
+                    {bounty.isLoadingSubmissions ? (
+                      <span className="animate-pulse">
+                        Loading submissions...
+                      </span>
+                    ) : (
+                      <>
+                        <b>{bounty.applicants}</b> application
+                        {bounty.applicants !== 1 && "s"} submitted
+                      </>
+                    )}
                   </span>
                 </div>
 
-                {hasApplied && (
+                {hasUserSubmitted && !isCreator && (
                   <div className="flex items-center text-green-600">
                     <CheckCircle className="mr-2 h-4 w-4" />
                     <span className="font-medium">You have applied</span>
                   </div>
                 )}
               </div>
+
+              {/* Show submission list for bounty creators */}
+              {isCreator && allSubmissions.length > 0 && (
+                <div className="mt-4 space-y-3">
+                  <h4 className="font-medium text-gray-900">Submissions:</h4>
+                  {loadingSubmissions ? (
+                    <div className="animate-pulse space-y-2">
+                      {[1, 2, 3].map((i) => (
+                        <div key={i} className="h-12 bg-gray-200 rounded"></div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {allSubmissions.map((submission, index) => (
+                        <div
+                          key={`${submission.hunter}-${index}`}
+                          className="flex items-center justify-between p-3 bg-white rounded-lg border hover:border-indigo-200 transition-colors"
+                        >
+                          <div className="flex items-center gap-3">
+                            <Avatar className="h-8 w-8">
+                              <AvatarFallback className="bg-indigo-100 text-indigo-800 text-xs">
+                                {submission.hunter.slice(2, 4).toUpperCase()}
+                              </AvatarFallback>
+                            </Avatar>
+                            <div>
+                              <div className="font-medium text-sm">
+                                {formatCreatorAddress(submission.hunter)}
+                              </div>
+                              <div className="text-xs text-gray-500">
+                                Hunter
+                              </div>
+                            </div>
+                          </div>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() =>
+                              handleViewSubmissionDetails(submission)
+                            }
+                            className="flex items-center gap-2"
+                          >
+                            <MessageCircle className="h-4 w-4" />
+                            View Details
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Show empty state for bounty creators with no submissions */}
+              {isCreator &&
+                allSubmissions.length === 0 &&
+                !loadingSubmissions &&
+                !bounty.isLoadingSubmissions && (
+                  <div className="mt-4 text-center text-gray-500 py-4">
+                    No submissions yet. Share your bounty to attract hunters!
+                  </div>
+                )}
             </div>
           </div>
 
@@ -297,16 +520,40 @@ export default function BountyDetails({
           <Separator className="my-6" />
 
           {/* Action Buttons */}
-          <div>
+          <div className="flex gap-4 flex-wrap">
             {statusInfo.isOpen && (
               <>
-                {hasApplied ? (
-                  <div className="bg-green-50 text-green-700 px-6 py-3 rounded-lg inline-flex items-center">
+                {isCreator ? (
+                  /* Bounty Creator Actions */
+                  <div className="bg-blue-50 text-blue-700 px-6 py-3 rounded-lg inline-flex items-center">
                     <CheckCircle className="mr-2 h-4 w-4" />
-                    Already Applied
+                    You are the bounty creator - View submissions above
                   </div>
+                ) : hasUserSubmitted ? (
+                  /* Hunter who has submitted */
+                  <>
+                    {canViewDetails && (
+                      <Button
+                        onClick={() => handleViewSubmissionDetails()}
+                        className="flex items-center gap-2"
+                      >
+                        <Eye className="h-4 w-4" />
+                        View Your Submission
+                      </Button>
+                    )}
+
+                    <div className="bg-green-50 text-green-700 px-6 py-3 rounded-lg inline-flex items-center">
+                      <CheckCircle className="mr-2 h-4 w-4" />
+                      Already Applied - Application Submitted
+                    </div>
+                  </>
                 ) : (
-                  <Button onClick={onApply} className="w-full md:w-auto">
+                  /* Hunter who hasn't submitted */
+                  <Button
+                    onClick={() => onApply?.(bountyId)}
+                    className="flex items-center gap-2"
+                  >
+                    <FileText className="h-4 w-4" />
                     Apply for this Bounty
                   </Button>
                 )}
@@ -320,6 +567,36 @@ export default function BountyDetails({
               </div>
             )}
           </div>
+
+          {/* Debug Info (only in development) */}
+          {process.env.NODE_ENV === "development" && (
+            <div className="mt-8 p-4 bg-yellow-50 rounded-lg">
+              <h4 className="font-semibold text-yellow-800 mb-2">
+                Debug Info:
+              </h4>
+              <div className="text-xs text-yellow-700 space-y-1">
+                <div>Bounty ID: {bounty.id}</div>
+                <div>Is Bounty Creator: {isCreator ? "Yes" : "No"}</div>
+                <div>Has User Submitted: {hasUserSubmitted ? "Yes" : "No"}</div>
+                <div>
+                  Can View Submission Details: {canViewDetails ? "Yes" : "No"}
+                </div>
+                <div>
+                  User Submission CID:{" "}
+                  {userSubmission?.descriptionCID || "None"}
+                </div>
+                <div>All Submissions Count: {allSubmissions.length}</div>
+                <div>
+                  Loading Submissions:{" "}
+                  {bounty.isLoadingSubmissions ? "Yes" : "No"}
+                </div>
+                <div>
+                  Loading All Submissions: {loadingSubmissions ? "Yes" : "No"}
+                </div>
+                <div>Total Applicants: {bounty.applicants}</div>
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

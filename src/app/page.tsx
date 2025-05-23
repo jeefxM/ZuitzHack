@@ -310,6 +310,7 @@ export default function BountyApp() {
           <BountyDetails
             bounty={selectedBounty}
             hasApplied={hasApplied}
+            bountyId={selectedBountyId!}
             onBack={() => {
               // Go back to the previous view (could be LIST or MY_BOUNTIES)
               // For now, default to LIST - you could track previous view if needed

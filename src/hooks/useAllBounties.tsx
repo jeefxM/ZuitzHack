@@ -1,5 +1,6 @@
 import { useReadContract } from "wagmi";
-import { useEffect, useState, useRef } from "react";
+import { useAccount, usePublicClient } from "wagmi";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { formatUnits } from "viem";
 import { BountyABI } from "@/lib/BountyABI";
 
@@ -18,9 +19,12 @@ interface BountyMetadata {
   title: string;
   description: string;
   tags: string[];
-  // We'll keep deadline in the metadata structure even though the contract
-  // doesn't track it - it could still be part of the metadata JSON
   deadline?: string;
+}
+
+interface Submission {
+  hunter: string;
+  descriptionCID: string;
 }
 
 export interface EnhancedBounty {
@@ -30,16 +34,22 @@ export interface EnhancedBounty {
   reward: string; // Formatted USDC amount
   tags: string[];
   creator: string;
-  applicants: number;
+  applicants: number; // Now actual count from contract
   status: number;
   metadataCID: string;
   rawAmount: bigint;
   isLoading?: boolean;
   metadataError?: string;
-  deadline?: string; // Optional now since we don't have it in the contract
+  deadline?: string;
+  // New fields for submission tracking
+  hasUserSubmitted?: boolean; // Whether current user has submitted
+  userSubmission?: Submission; // Current user's submission if they submitted
+  isLoadingSubmissions?: boolean;
 }
 
 export function useAllBounties() {
+  const { address } = useAccount();
+  const publicClient = usePublicClient();
   const [enhancedBounties, setEnhancedBounties] = useState<EnhancedBounty[]>(
     []
   );
@@ -79,6 +89,75 @@ export function useAllBounties() {
     abi: BountyABI,
     functionName: "getAllActiveBounties",
   });
+
+  // Get submission count for a bounty
+  const getSubmissionCount = useCallback(
+    async (bountyId: number): Promise<number> => {
+      if (!publicClient) return 0;
+
+      try {
+        console.log(`Fetching submission count for bounty #${bountyId}...`);
+
+        const count = (await publicClient.readContract({
+          address: CONTRACT_ADDRESS,
+          abi: BountyABI,
+          functionName: "getSubmissionCount",
+          args: [BigInt(bountyId)],
+        })) as bigint;
+
+        const countNumber = Number(count);
+        console.log(`Bounty #${bountyId} has ${countNumber} submissions`);
+        return countNumber;
+      } catch (error) {
+        console.error(
+          `Error fetching submission count for bounty #${bountyId}:`,
+          error
+        );
+        return 0;
+      }
+    },
+    [publicClient]
+  );
+
+  // Get user's submission for a bounty (if any)
+  const getUserSubmission = useCallback(
+    async (
+      bountyId: number,
+      userAddress: string
+    ): Promise<Submission | null> => {
+      if (!publicClient || !userAddress) return null;
+
+      try {
+        console.log(
+          `Checking if user ${userAddress} submitted to bounty #${bountyId}...`
+        );
+
+        const descriptionCID = (await publicClient.readContract({
+          address: CONTRACT_ADDRESS,
+          abi: BountyABI,
+          functionName: "getSubmission",
+          args: [BigInt(bountyId), userAddress],
+        })) as string;
+
+        if (descriptionCID && descriptionCID !== "") {
+          console.log(`User has submitted to bounty #${bountyId}`);
+          return {
+            hunter: userAddress,
+            descriptionCID,
+          };
+        }
+
+        return null;
+      } catch (error) {
+        console.error(
+          `Error checking user submission for bounty #${bountyId}:`,
+          error
+        );
+        return null;
+      }
+    },
+    [publicClient]
+  );
 
   // Function to fetch metadata through our API route
   const fetchMetadata = async (cid: string): Promise<BountyMetadata | null> => {
@@ -170,12 +249,14 @@ export function useAllBounties() {
     }
   }, [activeBountiesData, rawBounties.length]);
 
-  // Fetch metadata for each bounty
+  // Fetch metadata and submission data for each bounty
   useEffect(() => {
     if (rawBounties.length === 0) return;
 
-    const fetchAllMetadata = async () => {
-      console.log("📡 Fetching metadata for all bounties...");
+    const fetchAllBountyData = async () => {
+      console.log(
+        "📡 Fetching metadata and submission data for all bounties..."
+      );
 
       // Create initial enhanced bounties with loading state
       const initialEnhanced: EnhancedBounty[] = rawBounties.map((bounty) => ({
@@ -185,19 +266,30 @@ export function useAllBounties() {
         reward: formatUnits(bounty.amount, 6),
         tags: [],
         creator: bounty.creator,
-        applicants: 0,
+        applicants: 0, // Will be updated when submission count is fetched
         status: bounty.status,
         metadataCID: bounty.metadataCID,
         rawAmount: bounty.amount,
         isLoading: true,
+        isLoadingSubmissions: true,
+        hasUserSubmitted: false,
       }));
 
       setEnhancedBounties(initialEnhanced);
 
-      // Fetch metadata for each bounty
+      // Process each bounty
       const enhanced = await Promise.all(
         rawBounties.map(async (bounty) => {
-          const metadata = await fetchMetadata(bounty.metadataCID);
+          // Fetch metadata and submission data in parallel
+          const [metadata, submissionCount, userSubmission] = await Promise.all(
+            [
+              fetchMetadata(bounty.metadataCID),
+              getSubmissionCount(bounty.id),
+              address
+                ? getUserSubmission(bounty.id, address)
+                : Promise.resolve(null),
+            ]
+          );
 
           const enhancedBounty: EnhancedBounty = {
             id: bounty.id,
@@ -207,12 +299,15 @@ export function useAllBounties() {
             deadline: metadata?.deadline,
             tags: metadata?.tags || [],
             creator: bounty.creator,
-            applicants: 0, // We don't have this data from the contract
+            applicants: submissionCount, // Now actual count from contract
             status: bounty.status,
             metadataCID: bounty.metadataCID,
             rawAmount: bounty.amount,
             isLoading: false,
+            isLoadingSubmissions: false,
             metadataError: metadata ? undefined : "Failed to load metadata",
+            hasUserSubmitted: !!userSubmission,
+            userSubmission: userSubmission || undefined,
           };
 
           return enhancedBounty;
@@ -220,11 +315,155 @@ export function useAllBounties() {
       );
 
       setEnhancedBounties(enhanced);
-      console.log("✅ Enhanced all bounties with metadata");
+      console.log("✅ Enhanced all bounties with metadata and submission data");
     };
 
-    fetchAllMetadata();
-  }, [rawBounties]);
+    fetchAllBountyData();
+  }, [
+    rawBounties,
+    address,
+    publicClient,
+    getSubmissionCount,
+    getUserSubmission,
+  ]);
+
+  // Function to refresh submission data for a specific bounty
+  const refreshBountySubmissions = useCallback(
+    async (bountyId: number) => {
+      if (!publicClient) return;
+
+      console.log(`Refreshing submission data for bounty #${bountyId}...`);
+
+      // Mark this bounty as loading submissions
+      setEnhancedBounties((current) =>
+        current.map((b) =>
+          b.id === bountyId ? { ...b, isLoadingSubmissions: true } : b
+        )
+      );
+
+      try {
+        // Get fresh submission data
+        const [submissionCount, userSubmission] = await Promise.all([
+          getSubmissionCount(bountyId),
+          address
+            ? getUserSubmission(bountyId, address)
+            : Promise.resolve(null),
+        ]);
+
+        console.log(
+          `Refreshed: ${submissionCount} submissions for bounty #${bountyId}, user submitted: ${!!userSubmission}`
+        );
+
+        // Update the bounty with new submission data
+        setEnhancedBounties((current) =>
+          current.map((b) =>
+            b.id === bountyId
+              ? {
+                  ...b,
+                  applicants: submissionCount,
+                  hasUserSubmitted: !!userSubmission,
+                  userSubmission: userSubmission || undefined,
+                  isLoadingSubmissions: false,
+                }
+              : b
+          )
+        );
+      } catch (error) {
+        console.error(
+          `Error refreshing submission data for bounty #${bountyId}:`,
+          error
+        );
+
+        // Mark as not loading even on error
+        setEnhancedBounties((current) =>
+          current.map((b) =>
+            b.id === bountyId ? { ...b, isLoadingSubmissions: false } : b
+          )
+        );
+      }
+    },
+    [publicClient, getSubmissionCount, getUserSubmission, address]
+  );
+
+  // Function to check if user can view submission details for a bounty
+  const canViewSubmissionDetails = useCallback(
+    (bountyId: number): boolean => {
+      const bounty = enhancedBounties.find((b) => b.id === bountyId);
+      if (!bounty || !address) return false;
+
+      // User can view submission details if:
+      // 1. They have submitted to the bounty, OR
+      // 2. They are the bounty creator
+      const hasUserSubmitted = !!(
+        bounty.hasUserSubmitted && bounty.userSubmission
+      );
+      const isBountyCreator =
+        bounty.creator.toLowerCase() === address.toLowerCase();
+
+      return hasUserSubmitted || isBountyCreator;
+    },
+    [enhancedBounties, address]
+  );
+
+  // Get all submissions for a bounty (for bounty creators)
+  const getAllSubmissionsForBounty = useCallback(
+    async (bountyId: number): Promise<Submission[]> => {
+      if (!publicClient) return [];
+
+      try {
+        console.log(`Fetching all submissions for bounty #${bountyId}...`);
+
+        // Use the contract's getAllSubmissions function
+        const submissions = (await publicClient.readContract({
+          address: CONTRACT_ADDRESS,
+          abi: BountyABI,
+          functionName: "getAllSubmissions",
+          args: [BigInt(bountyId)],
+        })) as Array<{ hunter: string; descriptionCID: string }>;
+
+        console.log(
+          `Found ${submissions.length} submissions for bounty #${bountyId}`
+        );
+
+        // Convert to our Submission type
+        const formattedSubmissions: Submission[] = submissions.map((sub) => ({
+          hunter: sub.hunter,
+          descriptionCID: sub.descriptionCID,
+        }));
+
+        return formattedSubmissions;
+      } catch (error) {
+        console.error(
+          `Error fetching all submissions for bounty #${bountyId}:`,
+          error
+        );
+        return [];
+      }
+    },
+    [publicClient]
+  );
+
+  // Function to get user's submission for a specific bounty
+  const getUserSubmissionForBounty = useCallback(
+    (bountyId: number): Submission | undefined => {
+      const bounty = enhancedBounties.find((b) => b.id === bountyId);
+      return bounty?.userSubmission;
+    },
+    [enhancedBounties]
+  );
+
+  // Function to check if current user is bounty creator
+  const isBountyCreator = useCallback(
+    (bountyId: number): boolean => {
+      const bounty = enhancedBounties.find((b) => b.id === bountyId);
+      return !!(
+        bounty &&
+        address &&
+        bounty.creator.toLowerCase() === address.toLowerCase()
+      );
+    },
+    [enhancedBounties, address]
+  );
 
   // Calculate basic stats
   const totalBounties = bountyCount ? Number(bountyCount) : 0;
@@ -244,5 +483,13 @@ export function useAllBounties() {
     },
     isLoading,
     isLoadingMetadata: enhancedBounties.some((b) => b.isLoading),
+    isLoadingSubmissions: enhancedBounties.some((b) => b.isLoadingSubmissions),
+
+    // New submission-related functions
+    refreshBountySubmissions,
+    canViewSubmissionDetails,
+    getUserSubmissionForBounty,
+    getAllSubmissionsForBounty,
+    isBountyCreator,
   };
 }
