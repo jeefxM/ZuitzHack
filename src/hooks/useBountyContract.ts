@@ -3,12 +3,13 @@ import {
   useWriteContract,
   useWaitForTransactionReceipt,
   useReadContract,
+  useAccount,
 } from "wagmi";
 import { parseUnits, type Address } from "viem";
 
 // Contract addresses - update these for your deployment
 export const CONTRACTS = {
-  SIMPLE_BOUNTIES: "0x21F89a1c5BdC3ae232fBFC9Fc47F313daBa64B1d" as Address,
+  SIMPLE_BOUNTIES: "0xCbcBF569D75B9C00B2469857c66767bA833FC641" as Address,
   USDC: "0x036CbD53842c5426634e7929541eC2318f3dCF7e" as Address,
 };
 
@@ -203,8 +204,10 @@ export function useBounty() {
   };
 }
 
-// Combined hook for the full bounty creation flow
+// Combined hook for the full bounty creation flow with allowance checking
 export function useCreateBountyFlow() {
+  const { address } = useAccount();
+
   const {
     writeContract: approveWrite,
     data: approveHash,
@@ -219,6 +222,20 @@ export function useCreateBountyFlow() {
     error: createError,
   } = useWriteContract();
 
+  // Check current allowance
+  const { data: currentAllowance, refetch: refetchAllowance } = useReadContract(
+    {
+      address: CONTRACTS.USDC,
+      abi: USDC_ABI,
+      functionName: "allowance",
+      args: address ? [address, CONTRACTS.SIMPLE_BOUNTIES] : undefined,
+      query: {
+        enabled: !!address,
+      },
+    }
+  );
+
+  // Simplified transaction receipt handling - remove problematic options
   const {
     isLoading: isApproveConfirming,
     isSuccess: isApproveConfirmed,
@@ -226,12 +243,6 @@ export function useCreateBountyFlow() {
     error: approveReceiptError,
   } = useWaitForTransactionReceipt({
     hash: approveHash,
-    confirmations: 1,
-    query: {
-      enabled: !!approveHash,
-      retry: 3,
-      refetchInterval: 2000, // Check every 2 seconds
-    },
   });
 
   const {
@@ -240,16 +251,20 @@ export function useCreateBountyFlow() {
     data: createReceipt,
   } = useWaitForTransactionReceipt({
     hash: createBountyHash,
-    confirmations: 1,
-    query: {
-      enabled: !!createBountyHash,
-      retry: 3,
-      refetchInterval: 2000,
-    },
   });
 
-  const approveForBounty = async (amount: string) => {
+  const checkAndApproveForBounty = async (amount: string) => {
     const amountWei = parseUnits(amount, 6); // USDC has 6 decimals
+
+    console.log("🔍 Checking current allowance...");
+    console.log("Required amount:", amountWei.toString());
+    console.log("Current allowance:", currentAllowance?.toString() || "0");
+
+    // Check if we need approval
+    if (currentAllowance && currentAllowance >= amountWei) {
+      console.log("✅ Sufficient allowance already exists, skipping approval");
+      return { needsApproval: false, hash: null };
+    }
 
     console.log(
       "🔓 Approving USDC for amount:",
@@ -258,12 +273,14 @@ export function useCreateBountyFlow() {
       amountWei.toString()
     );
 
-    return approveWrite({
+    const hash = await approveWrite({
       address: CONTRACTS.USDC,
       abi: USDC_ABI,
       functionName: "approve",
       args: [CONTRACTS.SIMPLE_BOUNTIES, amountWei],
     });
+
+    return { needsApproval: true, hash };
   };
 
   const createBounty = async (amount: string, metadataCID: string) => {
@@ -279,9 +296,16 @@ export function useCreateBountyFlow() {
     });
   };
 
+  // Helper function to check if allowance is sufficient
+  const hasInsufficientAllowance = (amount: string) => {
+    if (!currentAllowance) return true;
+    const amountWei = parseUnits(amount, 6);
+    return currentAllowance < amountWei;
+  };
+
   return {
     // Approval
-    approveForBounty,
+    approveForBounty: checkAndApproveForBounty,
     isApprovePending,
     isApproveConfirming,
     isApproveConfirmed,
@@ -297,5 +321,10 @@ export function useCreateBountyFlow() {
     createBountyHash,
     createReceipt,
     createError,
+
+    // Allowance helpers
+    currentAllowance,
+    refetchAllowance,
+    hasInsufficientAllowance,
   };
 }

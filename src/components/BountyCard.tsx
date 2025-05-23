@@ -13,7 +13,7 @@ export default function BountyCard({ bounty, onViewDetails }: BountyCardProps) {
         <div className="flex justify-between items-start mb-4">
           <div className="flex flex-wrap gap-2"></div>
           <Badge className="bg-indigo-100 text-indigo-800 hover:bg-indigo-100">
-            {bounty.reward} ETH
+            {bounty.reward} USDC
           </Badge>
         </div>
 

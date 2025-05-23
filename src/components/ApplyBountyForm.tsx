@@ -1,227 +1,326 @@
-import { ArrowLeft, AlertTriangle, CheckCircle, Send } from "lucide-react";
+// components/SubmitBountyForm.tsx
+import { useState } from "react";
+import { useAccount } from "wagmi";
+import { useApplyForBounty } from "@/hooks/useSubmitToBounty";
+import {
+  ArrowLeft,
+  CheckCircle,
+  AlertCircle,
+  FileText,
+  Loader2,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { Textarea } from "@/components/ui/textarea";
+import { Card, CardContent } from "@/components/ui/card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Separator } from "@/components/ui/separator";
-import { ApplyBountyFormProps } from "@/lib/types";
+import { Checkbox } from "@/components/ui/checkbox";
 
-export default function ApplyBountyForm({
+interface SubmitBountyFormProps {
+  bounty: {
+    id: number;
+    title: string;
+    reward: string;
+    creator: string;
+  };
+  onBack: () => void;
+}
+
+export default function SubmitBountyForm({
   bounty,
-  formData,
-  handleInputChange,
-  errors,
-  isSubmitting,
-  showSuccess,
-  onSubmit,
   onBack,
-}: ApplyBountyFormProps) {
-  if (!bounty) return null;
+}: SubmitBountyFormProps) {
+  const { address } = useAccount();
+  const { state, applyForBounty, reset } = useApplyForBounty();
+
+  const [formData, setFormData] = useState({
+    title: "",
+    description: "",
+    acceptTerms: false,
+  });
+
+  const [errors, setErrors] = useState<Record<string, string>>({});
+
+  const handleInputChange = (field: string, value: string | boolean) => {
+    setFormData((prev) => ({
+      ...prev,
+      [field]: value,
+    }));
+
+    // Clear error when user starts typing
+    if (errors[field]) {
+      setErrors((prev) => ({
+        ...prev,
+        [field]: "",
+      }));
+    }
+  };
+
+  const validateForm = () => {
+    const newErrors: Record<string, string> = {};
+
+    if (!formData.title.trim()) {
+      newErrors.title = "Submission title is required";
+    }
+
+    if (!formData.description.trim()) {
+      newErrors.description = "Submission description is required";
+    }
+
+    if (!formData.acceptTerms) {
+      newErrors.acceptTerms = "You must confirm your submission";
+    }
+
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (!address) {
+      alert("Please connect your wallet first");
+      return;
+    }
+
+    if (!validateForm()) return;
+
+    try {
+      await applyForBounty({
+        title: formData.title,
+        description: formData.description,
+        bountyId: bounty.id,
+      });
+    } catch (error) {
+      console.error("Submission error:", error);
+    }
+  };
+
+  const handleBack = () => {
+    reset();
+    onBack();
+  };
+
+  const isProcessing =
+    state.isUploading || state.isSubmitting || state.isConfirming;
 
   return (
     <div className="max-w-3xl mx-auto">
       <Button
         variant="ghost"
-        onClick={onBack}
+        onClick={handleBack}
         className="flex items-center text-indigo-600 hover:text-indigo-800 mb-6"
       >
-        <ArrowLeft className="mr-2 h-4 w-4" /> Back to bounty details
+        <ArrowLeft className="mr-2 h-4 w-4" /> Back to bounty
       </Button>
 
       <Card className="overflow-hidden shadow-sm">
-        <CardHeader className="border-b border-gray-100 bg-gray-50 px-8 py-4">
-          <div className="flex items-center">
-            <Badge className="mr-3 bg-indigo-100 text-indigo-800 hover:bg-indigo-100">
-              {bounty.reward} ETH
-            </Badge>
-            <h1 className="text-xl font-semibold text-gray-900">
-              Apply for: {bounty.title}
-            </h1>
-          </div>
-        </CardHeader>
-
         <CardContent className="p-8">
-          {showSuccess && (
+          <h1 className="text-2xl font-bold text-gray-900 mb-2">
+            Submit Your Work
+          </h1>
+          <p className="text-gray-600 mb-6">
+            Submit your completed work for: <strong>{bounty.title}</strong>
+          </p>
+
+          {/* Success Message */}
+          {state.isSuccess && (
             <Alert className="mb-6 bg-green-50 text-green-800 border-green-200">
               <CheckCircle className="h-4 w-4 text-green-500" />
-              <AlertTitle>Application Submitted Successfully!</AlertTitle>
-              <AlertDescription>
-                Your application has been received. You'll be notified if the
-                bounty creator has any questions or updates.
+              <AlertTitle>Submission Successful! 🎉</AlertTitle>
+              <AlertDescription className="mt-2">
+                <p className="mb-2">
+                  Your submission has been stored on Codex and submitted to the
+                  smart contract.
+                </p>
+                {state.cid && (
+                  <div className="mt-3">
+                    <p className="text-sm">
+                      <strong>Submission CID:</strong>
+                    </p>
+                    <code className="text-xs bg-green-100 px-2 py-1 rounded border block mt-1">
+                      {state.cid}
+                    </code>
+                  </div>
+                )}
+                {state.txHash && (
+                  <div className="mt-3">
+                    <p className="text-sm">
+                      <strong>Transaction Hash:</strong>
+                    </p>
+                    <code className="text-xs bg-green-100 px-2 py-1 rounded border block mt-1">
+                      {state.txHash}
+                    </code>
+                  </div>
+                )}
               </AlertDescription>
             </Alert>
           )}
 
-          <Alert className="mb-6 bg-amber-50 text-amber-800 border-amber-200">
-            <AlertTriangle className="h-4 w-4 text-amber-500" />
-            <AlertTitle>Application Tips</AlertTitle>
-            <AlertDescription>
-              Be specific about your experience, proposed solution, and
-              timeline. Quality applications stand out from the competition.
-            </AlertDescription>
-          </Alert>
+          {/* Error Message */}
+          {state.error && (
+            <Alert className="mb-6 bg-red-50 text-red-800 border-red-200">
+              <AlertCircle className="h-4 w-4 text-red-500" />
+              <AlertTitle>Submission Failed</AlertTitle>
+              <AlertDescription>{state.error}</AlertDescription>
+            </Alert>
+          )}
 
-          <form onSubmit={onSubmit} className="space-y-6">
-            {/* Proposal Details */}
-            <div className="space-y-2">
-              <Label
-                htmlFor="proposal"
-                className="text-sm font-medium text-gray-700"
-              >
-                Proposal Details <span className="text-red-500">*</span>
-              </Label>
-              <Textarea
-                id="proposal"
-                name="proposal"
-                rows={6}
-                value={formData.proposal}
-                onChange={(e) => handleInputChange("proposal", e.target.value)}
-                placeholder="Describe how you plan to approach this bounty and your proposed solution..."
-                className={errors.proposal ? "border-red-300" : ""}
-              />
-              {errors.proposal && (
-                <p className="text-sm text-red-600 mt-1">{errors.proposal}</p>
-              )}
-              <p className="text-xs text-gray-500">
-                Be specific about your approach, technology choices, and
-                methodology.
-              </p>
+          {/* Processing Status */}
+          {isProcessing && (
+            <Alert className="mb-6 bg-blue-50 text-blue-800 border-blue-200">
+              <div className="flex items-center">
+                <Loader2 className="h-4 w-4 text-blue-500 mr-2 animate-spin" />
+                <AlertTitle>
+                  {state.isUploading
+                    ? "Uploading to Codex..."
+                    : state.isSubmitting
+                    ? "Submitting to Contract..."
+                    : "Waiting for Confirmation..."}
+                </AlertTitle>
+              </div>
+              <AlertDescription>
+                {state.isUploading
+                  ? "Your submission is being uploaded to Codex storage."
+                  : state.isSubmitting
+                  ? "Your submission is being recorded on the blockchain."
+                  : "Waiting for the transaction to be confirmed."}
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {/* Bounty Info */}
+          <div className="mb-6 p-4 bg-gray-50 rounded-lg">
+            <h3 className="font-semibold text-gray-900 mb-2">Bounty Details</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+              <div>
+                <span className="text-gray-500">Reward:</span>
+                <span className="ml-2 font-medium">{bounty.reward} USDC</span>
+              </div>
+              <div>
+                <span className="text-gray-500">Creator:</span>
+                <span className="ml-2 font-mono text-xs">
+                  {bounty.creator.slice(0, 6)}...{bounty.creator.slice(-4)}
+                </span>
+              </div>
             </div>
+          </div>
 
-            {/* Experience */}
-            <div className="space-y-2">
-              <Label
-                htmlFor="experience"
-                className="text-sm font-medium text-gray-700"
-              >
-                Relevant Experience
-              </Label>
-              <Textarea
-                id="experience"
-                name="experience"
-                rows={4}
-                value={formData.experience}
-                onChange={(e) =>
-                  handleInputChange("experience", e.target.value)
-                }
-                placeholder="Describe your relevant experience, skills, and past projects..."
-              />
-              <p className="text-xs text-gray-500">
-                Highlight previous work related to this bounty's requirements.
-              </p>
-            </div>
+          {/* Submission Form */}
+          {!state.isSuccess && (
+            <form onSubmit={handleSubmit} className="space-y-6">
+              {/* Title */}
+              <div className="space-y-2">
+                <Label
+                  htmlFor="title"
+                  className="text-sm font-medium text-gray-700"
+                >
+                  <FileText className="inline h-4 w-4 mr-1" />
+                  Submission Title <span className="text-red-500">*</span>
+                </Label>
+                <Input
+                  id="title"
+                  value={formData.title}
+                  onChange={(e) => handleInputChange("title", e.target.value)}
+                  placeholder="e.g., 'Smart Contract Implementation for NFT Marketplace'"
+                  className={errors.title ? "border-red-300" : ""}
+                  disabled={isProcessing}
+                />
+                {errors.title && (
+                  <p className="text-sm text-red-600">{errors.title}</p>
+                )}
+              </div>
 
-            {/* Timeline */}
-            <div className="space-y-2">
-              <Label
-                htmlFor="timeline"
-                className="text-sm font-medium text-gray-700"
-              >
-                Proposed Timeline <span className="text-red-500">*</span>
-              </Label>
-              <Textarea
-                id="timeline"
-                name="timeline"
-                rows={3}
-                value={formData.timeline}
-                onChange={(e) => handleInputChange("timeline", e.target.value)}
-                placeholder="Outline your expected timeline with key milestones..."
-                className={errors.timeline ? "border-red-300" : ""}
-              />
-              {errors.timeline && (
-                <p className="text-sm text-red-600 mt-1">{errors.timeline}</p>
-              )}
-            </div>
+              {/* Description */}
+              <div className="space-y-2">
+                <Label
+                  htmlFor="description"
+                  className="text-sm font-medium text-gray-700"
+                >
+                  <FileText className="inline h-4 w-4 mr-1" />
+                  Submission Description <span className="text-red-500">*</span>
+                </Label>
+                <Textarea
+                  id="description"
+                  rows={8}
+                  value={formData.description}
+                  onChange={(e) =>
+                    handleInputChange("description", e.target.value)
+                  }
+                  placeholder="Describe your completed work, include:
+• What you delivered
+• How to access/test your work (links, instructions)
+• Any relevant documentation
+• Technical details or implementation notes"
+                  className={errors.description ? "border-red-300" : ""}
+                  disabled={isProcessing}
+                />
+                {errors.description && (
+                  <p className="text-sm text-red-600">{errors.description}</p>
+                )}
+              </div>
 
-            {/* Questions */}
-            <div className="space-y-2">
-              <Label
-                htmlFor="questions"
-                className="text-sm font-medium text-gray-700"
-              >
-                Questions for Bounty Creator
-              </Label>
-              <Textarea
-                id="questions"
-                name="questions"
-                rows={3}
-                value={formData.questions}
-                onChange={(e) => handleInputChange("questions", e.target.value)}
-                placeholder="Any questions about the requirements or scope?"
-              />
-            </div>
-
-            {/* Terms */}
-            <div className="pt-4">
-              <div className="flex items-start">
+              {/* Terms */}
+              <div className="flex items-start space-x-2">
                 <Checkbox
-                  id="acceptTerms"
+                  id="terms"
                   checked={formData.acceptTerms}
                   onCheckedChange={(checked) =>
-                    handleInputChange("acceptTerms", checked as boolean)
+                    handleInputChange("acceptTerms", !!checked)
                   }
-                  className="mt-0.5"
+                  disabled={isProcessing}
+                  className={errors.acceptTerms ? "border-red-300" : ""}
                 />
-                <Label
-                  htmlFor="acceptTerms"
-                  className="ml-3 text-sm text-gray-700"
-                >
-                  I agree to the{" "}
-                  <a href="#" className="text-indigo-600 hover:text-indigo-800">
-                    terms and conditions
-                  </a>{" "}
-                  and understand that my wallet address will be visible to the
-                  bounty creator.
-                </Label>
-              </div>
-              {errors.terms && (
-                <p className="text-sm text-red-600 mt-1">{errors.terms}</p>
-              )}
-            </div>
-
-            {/* Submit Button */}
-            <Separator className="my-6" />
-
-            <Button
-              type="submit"
-              disabled={isSubmitting}
-              className="w-full md:w-auto flex items-center justify-center"
-            >
-              {isSubmitting ? (
-                <>
-                  <svg
-                    className="animate-spin mr-2 h-4 w-4 text-white"
-                    xmlns="http://www.w3.org/2000/svg"
-                    fill="none"
-                    viewBox="0 0 24 24"
+                <div className="grid gap-1.5 leading-none">
+                  <Label
+                    htmlFor="terms"
+                    className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
                   >
-                    <circle
-                      className="opacity-25"
-                      cx="12"
-                      cy="12"
-                      r="10"
-                      stroke="currentColor"
-                      strokeWidth="4"
-                    ></circle>
-                    <path
-                      className="opacity-75"
-                      fill="currentColor"
-                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                    ></path>
-                  </svg>
-                  Submitting Application...
-                </>
-              ) : (
-                <>
-                  <Send className="mr-2 h-4 w-4" />
-                  Submit Application
-                </>
-              )}
-            </Button>
-          </form>
+                    I confirm this is my completed work
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    By submitting, you confirm that this work fulfills the
+                    bounty requirements and is ready for review.
+                  </p>
+                  {errors.acceptTerms && (
+                    <p className="text-xs text-red-600">{errors.acceptTerms}</p>
+                  )}
+                </div>
+              </div>
+
+              {/* Submit Button */}
+              <Button
+                type="submit"
+                disabled={isProcessing || !address}
+                className="w-full md:w-auto"
+              >
+                {!address ? (
+                  "Connect Wallet First"
+                ) : isProcessing ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    {state.isUploading
+                      ? "Uploading to Codex..."
+                      : state.isSubmitting
+                      ? "Submitting to Contract..."
+                      : "Waiting for Confirmation..."}
+                  </>
+                ) : (
+                  "Submit Work"
+                )}
+              </Button>
+            </form>
+          )}
+
+          {/* Success Navigation */}
+          {state.isSuccess && (
+            <div className="text-center">
+              <Button onClick={handleBack} variant="outline">
+                Back to Bounty
+              </Button>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

@@ -29,8 +29,15 @@ interface UploadStatus {
 }
 
 interface TransactionStatus {
-  step: "idle" | "approving" | "approved" | "creating" | "completed";
+  step:
+    | "idle"
+    | "checking"
+    | "approving"
+    | "approved"
+    | "creating"
+    | "completed";
   error?: string;
+  skipApproval?: boolean;
 }
 
 export default function CreateBountyForm({
@@ -45,7 +52,7 @@ export default function CreateBountyForm({
 }: CreateBountyFormProps) {
   const { address } = useAccount();
 
-  // Use the custom bounty flow hook
+  // Use the enhanced bounty flow hook
   const {
     // Approval
     approveForBounty,
@@ -63,6 +70,11 @@ export default function CreateBountyForm({
     createBountyHash,
     createReceipt,
     createError,
+
+    // Allowance
+    currentAllowance,
+    hasInsufficientAllowance,
+    refetchAllowance,
   } = useCreateBountyFlow();
 
   // State for Codex upload
@@ -95,29 +107,45 @@ export default function CreateBountyForm({
     }
   };
 
-  // Handle approval success
+  // Handle approval success or skip
   useEffect(() => {
-    if (isApproveConfirmed && txStatus.step === "approving") {
-      console.log("✅ USDC approval confirmed");
-      setTxStatus((prev) => ({
-        ...prev,
-        step: "approved",
-      }));
+    if (txStatus.step === "approving") {
+      if (txStatus.skipApproval) {
+        // Skip approval, go straight to creation
+        console.log("✅ Sufficient allowance exists, skipping approval");
+        setTxStatus((prev) => ({ ...prev, step: "approved" }));
 
-      // Auto-trigger bounty creation after short delay
-      setTimeout(() => {
-        if (uploadStatus.cid && formData.reward) {
-          setTxStatus((prev) => ({ ...prev, step: "creating" }));
-          createBounty(formData.reward, uploadStatus.cid);
-        }
-      }, 1000);
+        // Auto-trigger bounty creation after short delay
+        setTimeout(() => {
+          if (uploadStatus.cid && formData.reward) {
+            setTxStatus((prev) => ({ ...prev, step: "creating" }));
+            createBounty(formData.reward, uploadStatus.cid);
+          }
+        }, 500);
+      } else if (isApproveConfirmed) {
+        console.log("✅ USDC approval confirmed");
+        setTxStatus((prev) => ({ ...prev, step: "approved" }));
+
+        // Refetch allowance to make sure it's updated
+        refetchAllowance();
+
+        // Auto-trigger bounty creation after short delay
+        setTimeout(() => {
+          if (uploadStatus.cid && formData.reward) {
+            setTxStatus((prev) => ({ ...prev, step: "creating" }));
+            createBounty(formData.reward, uploadStatus.cid);
+          }
+        }, 1000);
+      }
     }
   }, [
     isApproveConfirmed,
     txStatus.step,
+    txStatus.skipApproval,
     createBounty,
     uploadStatus.cid,
     formData.reward,
+    refetchAllowance,
   ]);
 
   // Handle bounty creation success
@@ -139,13 +167,25 @@ export default function CreateBountyForm({
     }
   }, [isCreateConfirmed, txStatus.step, createReceipt]);
 
-  // Handle errors
+  // Handle errors with better error messages
   useEffect(() => {
     if (approveReceiptError) {
       console.error("❌ Approval failed:", approveReceiptError);
+      let errorMessage = "USDC approval failed. Please try again.";
+
+      // Check if it's the transport error we've been seeing
+      if (
+        approveReceiptError.message?.includes("transports") ||
+        approveReceiptError.message?.includes("transport")
+      ) {
+        errorMessage =
+          "Network error while confirming approval. The transaction may have succeeded - please check your wallet and try creating the bounty again.";
+      }
+
       setTxStatus((prev) => ({
         ...prev,
-        error: "USDC approval failed. Please try again.",
+        step: "idle",
+        error: errorMessage,
       }));
     }
 
@@ -153,6 +193,7 @@ export default function CreateBountyForm({
       console.error("❌ Bounty creation failed:", createError);
       setTxStatus((prev) => ({
         ...prev,
+        step: "idle",
         error: "Bounty creation failed. Please try again.",
       }));
     }
@@ -219,11 +260,29 @@ export default function CreateBountyForm({
       console.log("✅ Bounty metadata uploaded to Codex!");
       console.log("📋 CID:", uploadResult.cid);
 
-      // Step 2: Start with USDC approval
-      setTxStatus({ step: "approving" });
+      // Step 2: Check allowance and approve if needed
+      setTxStatus({ step: "checking" });
 
-      // Use the hook's approve function
-      await approveForBounty(formData.reward);
+      // Check if approval is needed
+      const needsApproval = hasInsufficientAllowance(formData.reward);
+
+      if (!needsApproval) {
+        console.log(
+          "✅ Sufficient allowance exists, proceeding to bounty creation"
+        );
+        setTxStatus({ step: "approving", skipApproval: true });
+      } else {
+        console.log("🔓 Insufficient allowance, requesting approval");
+        setTxStatus({ step: "approving", skipApproval: false });
+
+        // Use the enhanced approve function
+        const approvalResult = await approveForBounty(formData.reward);
+
+        if (!approvalResult.needsApproval) {
+          // This shouldn't happen since we checked above, but just in case
+          setTxStatus((prev) => ({ ...prev, skipApproval: true }));
+        }
+      }
     } catch (error) {
       console.error("❌ Bounty creation failed:", error);
       setUploadStatus({
@@ -241,11 +300,18 @@ export default function CreateBountyForm({
 
   const isProcessing =
     uploadStatus.isUploading ||
+    txStatus.step === "checking" ||
     isApprovePending ||
     isApproveConfirming ||
     isCreatePending ||
     isCreateConfirming;
   const isCompleted = txStatus.step === "completed";
+
+  // Helper function to get current allowance display
+  const getCurrentAllowanceDisplay = () => {
+    if (!currentAllowance) return "0";
+    return formatUnits(currentAllowance, 6);
+  };
 
   return (
     <div className="max-w-3xl mx-auto">
@@ -328,16 +394,28 @@ export default function CreateBountyForm({
             <Alert className="mb-6 bg-blue-50 text-blue-800 border-blue-200">
               <AlertCircle className="h-4 w-4 text-blue-500" />
               <AlertTitle>
-                {txStatus.step === "approving" && "Step 1/2: Approving USDC"}
+                {uploadStatus.isUploading && "Uploading to Codex"}
+                {txStatus.step === "checking" && "Checking Allowance"}
+                {txStatus.step === "approving" &&
+                  !txStatus.skipApproval &&
+                  "Step 1/2: Approving USDC"}
+                {txStatus.step === "approving" &&
+                  txStatus.skipApproval &&
+                  "Step 1/2: Allowance OK"}
                 {txStatus.step === "approved" && "Step 1/2: Approval Complete"}
                 {txStatus.step === "creating" && "Step 2/2: Creating Bounty"}
-                {uploadStatus.isUploading && "Uploading to Codex"}
               </AlertTitle>
               <AlertDescription>
                 {uploadStatus.isUploading &&
                   "📤 Uploading metadata to Codex..."}
+                {txStatus.step === "checking" &&
+                  "🔍 Checking current USDC allowance..."}
                 {txStatus.step === "approving" &&
+                  !txStatus.skipApproval &&
                   "💰 Please approve USDC spending in your wallet..."}
+                {txStatus.step === "approving" &&
+                  txStatus.skipApproval &&
+                  "✅ Sufficient allowance exists, proceeding..."}
                 {txStatus.step === "approved" &&
                   "✅ USDC approved! Preparing bounty creation..."}
                 {txStatus.step === "creating" &&
@@ -360,16 +438,35 @@ export default function CreateBountyForm({
           )}
 
           {/* Wallet Info */}
-          {address && usdcBalance && (
-            <div className="mb-6 p-3 bg-gray-50 rounded-lg text-sm">
+          {address && (
+            <div className="mb-6 p-3 bg-gray-50 rounded-lg text-sm space-y-1">
               <p>
                 <strong>Wallet:</strong> {address.slice(0, 6)}...
                 {address.slice(-4)}
               </p>
+              {usdcBalance && (
+                <p>
+                  <strong>USDC Balance:</strong>{" "}
+                  {formatUnits(usdcBalance.value, 6)} USDC
+                </p>
+              )}
               <p>
-                <strong>USDC Balance:</strong>{" "}
-                {formatUnits(usdcBalance.value, 6)} USDC
+                <strong>Current Allowance:</strong>{" "}
+                {getCurrentAllowanceDisplay()} USDC
               </p>
+              {formData.reward && (
+                <p
+                  className={`text-xs ${
+                    hasInsufficientAllowance(formData.reward)
+                      ? "text-orange-600"
+                      : "text-green-600"
+                  }`}
+                >
+                  {hasInsufficientAllowance(formData.reward)
+                    ? "⚠️ Approval needed for this reward amount"
+                    : "✅ Sufficient allowance for this reward"}
+                </p>
+              )}
             </div>
           )}
 
@@ -523,7 +620,8 @@ export default function CreateBountyForm({
                     ></path>
                   </svg>
                   {uploadStatus.isUploading && "Uploading to Codex..."}
-                  {txStatus.step === "approving" && "Approving USDC..."}
+                  {txStatus.step === "checking" && "Checking Allowance..."}
+                  {txStatus.step === "approving" && "Processing Approval..."}
                   {txStatus.step === "creating" && "Creating Bounty..."}
                 </>
               ) : isCompleted ? (
@@ -547,14 +645,17 @@ export default function CreateBountyForm({
                   storage
                 </li>
                 <li>
-                  2. You approve USDC spending for the bounty contract (1st
-                  transaction)
+                  2. We check your current USDC allowance for the bounty
+                  contract
                 </li>
                 <li>
-                  3. The bounty is created on-chain with your USDC locked as
+                  3. If needed, you approve USDC spending (1st transaction)
+                </li>
+                <li>
+                  4. The bounty is created on-chain with your USDC locked as
                   reward (2nd transaction)
                 </li>
-                <li>4. Your bounty becomes visible to hunters immediately!</li>
+                <li>5. Your bounty becomes visible to hunters immediately!</li>
               </ol>
             </div>
           </form>

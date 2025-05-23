@@ -3,12 +3,13 @@
 import { useState, useEffect } from "react";
 import {
   ViewType,
-  Bounty,
   CreateBountyFormData,
   ApplyBountyFormData,
   FormErrors,
-} from "@/lib/types"; // Updated import path
-import { initialBounties } from "@/lib/constants";
+} from "@/lib/types";
+
+// Import the real hooks and components
+import { useAllBounties, type EnhancedBounty } from "@/hooks/useAllBounties";
 
 // Components
 import Header from "@/components/Header";
@@ -17,13 +18,18 @@ import BountyList from "@/components/BountyList";
 import BountyDetails from "@/components/BountyDetails";
 import CreateBountyForm from "@/components/CreateBountyForm";
 import ApplyBountyForm from "@/components/ApplyBountyForm";
+import MyBounties from "@/components/MyBounties";
 
 export default function BountyApp() {
+  // Get real bounty data from blockchain
+  const { bounties, totalBounties, stats, isLoading, isLoadingMetadata } =
+    useAllBounties();
+  console.log("Bounties:", totalBounties);
+
   // Main state
   const [currentView, setCurrentView] = useState<ViewType>(ViewType.LIST);
-  const [selectedBountyId, setSelectedBountyId] = useState<string | null>(null);
-  const [bounties, setBounties] = useState<Bounty[]>(initialBounties); // Initialize with mock data
-  const [appliedBounties, setAppliedBounties] = useState<string[]>([]);
+  const [selectedBountyId, setSelectedBountyId] = useState<number | null>(null);
+  const [appliedBounties, setAppliedBounties] = useState<number[]>([]);
 
   // Search and filter state
   const [searchQuery, setSearchQuery] = useState<string>("");
@@ -85,7 +91,12 @@ export default function BountyApp() {
     setSelectedBountyId(null);
   };
 
-  const viewBountyDetails = (id: string) => {
+  const viewMyBounties = () => {
+    setCurrentView(ViewType.MY_BOUNTIES);
+    setSelectedBountyId(null);
+  };
+
+  const viewBountyDetails = (id: number) => {
     setSelectedBountyId(id);
     setCurrentView(ViewType.DETAILS);
   };
@@ -217,43 +228,15 @@ export default function BountyApp() {
     return isValid;
   };
 
-  // Form submission handlers
+  // Real bounty submission (handled by CreateBountyForm component)
   const submitBounty = (e: React.FormEvent) => {
     e.preventDefault();
-
+    // The actual submission is handled by the CreateBountyForm component
+    // This is just for validation here
     if (!validateBountyForm()) return;
-
-    setIsSubmitting(true);
-
-    // Create new bounty
-    const bountyToAdd: Bounty = {
-      id: (bounties.length + 1).toString(),
-      title: newBounty.title,
-      description: newBounty.description,
-      longDescription: newBounty.description,
-      reward: newBounty.reward,
-      creator: "0x1234...5678", // This would be the connected wallet address
-      createdAt: new Date().toISOString().split("T")[0],
-      deadline: newBounty.deadline,
-      status: "open",
-      applicants: 0,
-      tags: newBounty.tags,
-    };
-
-    // Simulate transaction delay
-    setTimeout(() => {
-      setBounties([...bounties, bountyToAdd]);
-      setIsSubmitting(false);
-      setShowSuccess(true);
-
-      // Reset form after showing success
-      setTimeout(() => {
-        setShowSuccess(false);
-        viewBounties();
-      }, 2000);
-    }, 1500);
   };
 
+  // Application submission (this would integrate with your backend)
   const submitApplication = (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -261,20 +244,14 @@ export default function BountyApp() {
 
     setIsSubmitting(true);
 
-    // Simulate transaction delay
+    // TODO: Integrate with your backend to submit application
+    // For now, simulate the submission
     setTimeout(() => {
       if (selectedBountyId) {
         // Add to applied bounties
         setAppliedBounties([...appliedBounties, selectedBountyId]);
-
-        // Update application count
-        setBounties(
-          bounties.map((bounty) =>
-            bounty.id === selectedBountyId
-              ? { ...bounty, applicants: bounty.applicants + 1 }
-              : bounty
-          )
-        );
+        console.log("Application submitted for bounty:", selectedBountyId);
+        console.log("Application data:", application);
       }
 
       setIsSubmitting(false);
@@ -294,13 +271,21 @@ export default function BountyApp() {
     setFilterTag("");
   };
 
+  // Handle success from CreateBountyForm
+  const handleBountyCreated = () => {
+    setShowSuccess(true);
+    setTimeout(() => {
+      setShowSuccess(false);
+      viewBounties();
+    }, 2000);
+  };
+
   // Render content based on current view
   const renderContent = () => {
     switch (currentView) {
       case ViewType.LIST:
         return (
           <BountyList
-            bounties={filteredBounties}
             searchQuery={searchQuery}
             setSearchQuery={setSearchQuery}
             filterTag={filterTag}
@@ -311,12 +296,25 @@ export default function BountyApp() {
           />
         );
 
+      case ViewType.MY_BOUNTIES:
+        return (
+          <MyBounties
+            onBack={viewBounties}
+            onCreateBounty={startCreateBounty}
+            onViewDetails={viewBountyDetails}
+          />
+        );
+
       case ViewType.DETAILS:
         return (
           <BountyDetails
             bounty={selectedBounty}
             hasApplied={hasApplied}
-            onBack={viewBounties}
+            onBack={() => {
+              // Go back to the previous view (could be LIST or MY_BOUNTIES)
+              // For now, default to LIST - you could track previous view if needed
+              viewBounties();
+            }}
             onApply={startApplyForBounty}
           />
         );
@@ -359,9 +357,54 @@ export default function BountyApp() {
       <Header
         onCreateBounty={startCreateBounty}
         onViewBounties={viewBounties}
+        onViewMyBounties={viewMyBounties}
       />
 
       <main className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Show loading state while fetching initial data */}
+        {isLoading &&
+          (currentView === ViewType.LIST ||
+            currentView === ViewType.MY_BOUNTIES) && (
+            <div className="text-center py-12">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 mx-auto mb-4"></div>
+              <p className="text-gray-600">
+                Loading bounties from blockchain...
+              </p>
+            </div>
+          )}
+
+        {/* Show stats if available and on main list view */}
+        {stats && currentView === ViewType.LIST && (
+          <div className="mb-8">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="bg-white p-4 rounded-lg shadow-sm">
+                <h3 className="text-lg font-semibold text-gray-900">
+                  Total Bounties
+                </h3>
+                <p className="text-2xl font-bold text-indigo-600">
+                  {stats.total}
+                </p>
+              </div>
+              <div className="bg-white p-4 rounded-lg shadow-sm">
+                <h3 className="text-lg font-semibold text-gray-900">
+                  Active Bounties
+                </h3>
+                <p className="text-2xl font-bold text-green-600">
+                  {stats.active}
+                </p>
+              </div>
+              <div className="bg-white p-4 rounded-lg shadow-sm">
+                <h3 className="text-lg font-semibold text-gray-900">
+                  Completed
+                </h3>
+                <p className="text-2xl font-bold text-blue-600">
+                  {stats.completed}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
         {renderContent()}
       </main>
 

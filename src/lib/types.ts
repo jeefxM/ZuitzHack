@@ -60,17 +60,17 @@ export interface FormErrors {
 export interface HeaderProps {
   onCreateBounty: () => void;
   onViewBounties: () => void;
+  onViewMyBounties: () => void; // Add this prop
 }
 
 export interface BountyListProps {
-  bounties: Bounty[];
   searchQuery: string;
   setSearchQuery: (query: string) => void;
   filterTag: string;
   setFilterTag: (tag: string) => void;
   allTags: string[];
   resetFilters: () => void;
-  onViewDetails: (id: string) => void;
+  onViewDetails: (id: number) => void; // Changed from string to number
 }
 
 export interface BountyCardProps {

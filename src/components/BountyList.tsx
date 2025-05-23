@@ -11,9 +11,10 @@ import {
 } from "@/components/ui/select";
 import BountyCard from "@/components/BountyCard";
 import { BountyListProps } from "@/lib/types";
+import { useAllBounties } from "@/hooks/useAllBounties";
 
 export default function BountyList({
-  bounties,
+  // bounties,
   searchQuery,
   setSearchQuery,
   filterTag,
@@ -22,6 +23,8 @@ export default function BountyList({
   resetFilters,
   onViewDetails,
 }: BountyListProps) {
+  const { bounties, totalBounties, stats } = useAllBounties();
+  console.log(bounties);
   return (
     <div className="max-w-6xl mx-auto">
       <div className="flex flex-col md:flex-row md:items-center md:justify-between mb-8">
